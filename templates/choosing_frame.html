@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thermal Video Data Extractor</title>
+  <link rel="stylesheet" href="static/css/output.css">
+
+</head>
+<body class="h-screen w-full flex items-center justify-start flex-col p-2 bg-[#212121] relative font-custom">
+  <div class="fixed z-10 h-20 bg-[#171717] w-full top-0 text-white flex items-center p-5 text-2xl border border-black">ThermaTrack
+  </div>
+  <div id="canva_div" class="h-auto w-auto mt-24 bg-white p-2 flex items-center justify-center flex-col rounded-xl">
+    <h2 class="text-xl font-bold">Click to draw rectangles on the image</h2>
+    <canvas id="canvas"></canvas><br/>
+    <h2 class="text-sm font-bold">Enter the boxes description with comma seperated(eg: forehead, leftcheek, rightcheek etc)</h2>
+    <input type="text" name="description_txt" id="desciption_txt" class="outline-none border border-black h-10 rounded-lg w-full my-2 p-2">
+    <button id="saveBtn" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition">Save Rectangles Coordinates</button>
+
+  </div>
+
+  <div id="animation" class="absolute top-0 left-0 h-full w-full flex-1 bg-black opacity-70 items-center justify-center z-20 hidden">
+    <div class="follow-the-leader-line h-full">
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+    </div>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+  <script>
+    const canvas = new fabric.Canvas('canvas');
+    const video_url = "{{video_path}}";
+    let boxCounter = 0; // Counter for box numbering
+    
+    // Load background image
+    fabric.Image.fromURL("{{ frame_url }}", function(img) {
+      canvas.setWidth(img.width);
+      canvas.setHeight(img.height);
+      canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+        originX: 'left',
+        originY: 'top',
+        scaleX: 1,
+        scaleY: 1
+      });
+    });
+
+    // Function to create a numbered box
+    function createNumberedBox(x, y) {
+      boxCounter++;
+      
+      // Create rectangle
+      const rect = new fabric.Rect({
+        left: x,
+        top: y,
+        width: 100,
+        height: 100,
+        fill: 'transparent',
+        stroke: 'red',
+        strokeWidth: 2,
+        selectable: true,
+        boxNumber: boxCounter // Store box number as custom property
+      });
+      
+      // Create text label
+      const text = new fabric.Text(boxCounter.toString(), {
+        left: x + 5,
+        top: y + 5,
+        fontSize: 24,
+        fill: 'red',
+        fontWeight: 'bold',
+        selectable: false,
+        evented: false,
+        boxNumber: boxCounter // Store box number as custom property
+      });
+      
+      // Group rectangle and text together
+      const group = new fabric.Group([rect, text], {
+        left: x,
+        top: y,
+        selectable: true,
+        boxNumber: boxCounter // Store box number on group
+      });
+      
+      return group;
+    }
+
+    // Add numbered rectangle on canvas click
+    canvas.on('mouse:down', function(options) {
+      if (!options.target) {
+        const pointer = canvas.getPointer(options.e);
+        const numberedBox = createNumberedBox(pointer.x, pointer.y);
+        canvas.add(numberedBox);
+        canvas.renderAll();
+      }
+    });
+
+    // Function to get accurate coordinates from all boxes
+    function getBoxCoordinates() {
+      const boxes = [];
+      
+      canvas.getObjects().forEach(obj => {
+        if (obj.boxNumber) {
+          // Get the bounding box of the object
+          const boundingRect = obj.getBoundingRect();
+          
+          boxes.push({
+            boxNumber: obj.boxNumber,
+            x: Math.round(boundingRect.left),
+            y: Math.round(boundingRect.top),
+            width: Math.round(boundingRect.width),
+            height: Math.round(boundingRect.height),
+            // Also include center point for reference
+            centerX: Math.round(boundingRect.left + boundingRect.width / 2),
+            centerY: Math.round(boundingRect.top + boundingRect.height / 2)
+          });
+        }
+      });
+      
+      // Sort by box number to maintain order
+      boxes.sort((a, b) => a.boxNumber - b.boxNumber);
+      
+      return boxes;
+    }
+
+    // Enhanced download function
+    function downloadFile(url, filename) {
+      return new Promise((resolve, reject) => {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.style.display = 'none';
+        
+        // Add to DOM temporarily
+        document.body.appendChild(link);
+        
+        // Create and dispatch click event
+        const clickEvent = new MouseEvent('click', {
+          view: window,
+          bubbles: true,
+          cancelable: true
+        });
+        
+        // Set up cleanup and resolution
+        const cleanup = () => {
+          document.body.removeChild(link);
+          resolve();
+        };
+        
+        // Try to detect download start (not always reliable)
+        setTimeout(cleanup, 1000);
+        
+        // Trigger download
+        link.dispatchEvent(clickEvent);
+      });
+    }
+
+    // Alternative download approach using fetch + blob
+    async function downloadFileAsBlob(url, filename) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = filename;
+        link.style.display = 'none';
+        
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Clean up blob URL
+        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+        
+        return true;
+      } catch (error) {
+        console.error(`Failed to download ${filename}:`, error);
+        return false;
+      }
+    }
+
+    // Save button handler with improved coordinate handling
+    document.getElementById('saveBtn').addEventListener('click', async () => {
+      try {
+        // Show loading animation
+        document.getElementById("animation").classList.remove("hidden");
+        document.getElementById("animation").classList.add("flex");
+        document.getElementById("canva_div").classList.remove("flex");
+        document.getElementById("canva_div").classList.add("hidden");
+        
+        // Get accurate coordinates
+        const coordinates = getBoxCoordinates();
+        const inputs = document.getElementById("desciption_txt").value;
+        
+        console.log('Box coordinates:', coordinates);
+        console.log('Description inputs:', inputs);
+
+        // Validate that we have boxes
+        if (coordinates.length === 0) {
+          alert('Please draw at least one box on the canvas before saving.');
+          // Hide loading animation
+          document.getElementById("animation").classList.remove("flex");
+          document.getElementById("animation").classList.add("hidden");
+          document.getElementById("canva_div").classList.remove("hidden");
+          document.getElementById("canva_div").classList.add("flex");
+          return;
+        }
+
+        // Send to backend with improved data structure
+        const response = await fetch("/Image_coordinates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            headings_inputs: inputs,
+            coordinates: coordinates, // Send the full coordinate data
+            video_url: video_url,
+            total_boxes: coordinates.length
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        const result = await response.json();
+        console.log('Server response:', result);
+
+        // Hide loading animation
+        document.getElementById("animation").classList.remove("flex");
+        document.getElementById("animation").classList.add("hidden");
+        document.getElementById("canva_div").classList.remove("hidden");
+        document.getElementById("canva_div").classList.add("flex");
+
+        if (result.status === "success") {
+          console.log('Starting downloads...');
+          
+          // Method 1: Try blob download (more reliable)
+          if (result.download_url) {
+            console.log('Downloading Excel file...');
+            const excelSuccess = await downloadFileAsBlob(result.download_url, "output.xlsx");
+            if (!excelSuccess) {
+              console.log('Blob download failed, trying direct link...');
+              await downloadFile(result.download_url, "output.xlsx");
+            }
+          }
+          
+          // Wait between downloads
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          if (result.graph_url) {
+            console.log('Downloading graph file...');
+            const graphSuccess = await downloadFileAsBlob(result.graph_url, "graph.png");
+            if (!graphSuccess) {
+              console.log('Blob download failed, trying direct link...');
+              await downloadFile(result.graph_url, "graph.png");
+            }
+          }
+          
+          // Wait a bit more before redirect
+          setTimeout(() => {
+            console.log('Redirecting to home...');
+            window.location.href = "/";
+          }, 2000);
+          
+        } else {
+          alert("Processing failed on the server: " + (result.message || "Unknown error"));
+        }
+        
+      } catch (err) {
+        console.error("Error:", err);
+        
+        // Hide loading animation on error
+        document.getElementById("animation").classList.remove("flex");
+        document.getElementById("animation").classList.add("hidden");
+        document.getElementById("canva_div").classList.remove("hidden");
+        document.getElementById("canva_div").classList.add("flex");
+        
+        alert("Unexpected error occurred: " + err.message);
+      }
+    });
+
+    // Optional: Add a function to clear all boxes
+    function clearAllBoxes() {
+      const objectsToRemove = canvas.getObjects().filter(obj => obj.boxNumber);
+      objectsToRemove.forEach(obj => canvas.remove(obj));
+      boxCounter = 0;
+      canvas.renderAll();
+    }
+
+    // Optional: Add a function to get box count
+    function getBoxCount() {
+      return canvas.getObjects().filter(obj => obj.boxNumber).length;
+    }
+
+    // You can expose these functions globally if needed
+    window.clearAllBoxes = clearAllBoxes;
+    window.getBoxCount = getBoxCount;
+    window.getBoxCoordinates = getBoxCoordinates;
+  </script>
+</body>
+</html>

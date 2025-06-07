@@ -1,0 +1,4 @@
+thermal_env/
+venv/
+.env/
+__pycache__/

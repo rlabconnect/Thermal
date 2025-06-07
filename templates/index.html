@@ -1,0 +1,23 @@
+<!doctype html>
+<html class="h-full">
+  <head>
+    <title>Thermal Video Data Extractor</title>
+    <link rel="stylesheet" href="static/css/output.css">
+  </head>
+  <body class="h-full w-full flex items-center justify-center flex-col p-2 bg-[#212121] relative font-custom">
+    <div class="fixed z-50 h-20 bg-[#171717] w-full top-0 text-white flex items-center p-5 text-2xl border border-black">ThermaTrack
+    </div>
+    <div class="bg-gray-300 p-5 rounded-xl shadow-md text-center flex flex-col gap-7">
+        <div class="h-full w-full space-y-2">
+            <h2 class="text-xl font-bold">Upload a Thermal Video</h2>
+            <div class="h-[1px] w-full bg-black"></div>
+        </div>
+      <form method="POST" action="/" enctype="multipart/form-data" class="space-y-3 my-2">
+        <input type="file" name="video_file" accept="video/*" required class="block w-full" />
+        <button type="submit" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition">
+          Upload and Process
+        </button>
+      </form>
+    </div>
+  </body>
+</html>
