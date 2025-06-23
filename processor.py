@@ -20,7 +20,7 @@ def first_frame(video_path):
         os.makedirs("static/frames", exist_ok=True)
         frame_output_path = os.path.join("static", "frames", "firstframe.png")
         cv2.imwrite(frame_output_path, frame)
-        capture.release()  # Added release
+        capture.release()
         return frame_output_path
     capture.release()
     return None
@@ -65,8 +65,52 @@ def process_roi_batch(frame, regions, tesseract_config):
     
     return results
 
-def process_video(video_path, region_coordinates, headings_inputs):
+def create_optimized_plot(df, graph_path, fps, skip_frames):
+    """
+    Create plot with correct time axis
     
+    Args:
+        df: DataFrame with temperature data
+        graph_path: Path to save the graph
+        fps: Video frames per second
+        skip_frames: Number of frames skipped between data points
+    """
+    # Calculate actual time values
+    time_interval = skip_frames / fps  # Time between each data point in seconds
+    time_values = [i * time_interval for i in range(len(df))]
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Plot with correct time values
+    for column in df.columns:
+        plt.plot(time_values, df[column], label=column, linewidth=1.5)
+    
+    plt.title('Temperature Readings Over Time', fontsize=14)
+    plt.xlabel('Time (seconds)', fontsize=12)  # Now correctly labeled as seconds
+    plt.ylabel('Temperature (°C)', fontsize=12)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    
+    # Add some formatting for better time display
+    if max(time_values) > 120:  # If longer than 2 minutes
+        # Add minor ticks every 10 seconds, major every 30 seconds
+        plt.xticks(range(0, int(max(time_values)) + 1, 30))
+        plt.gca().set_xticks(range(0, int(max(time_values)) + 1, 10), minor=True)
+    else:
+        # Add ticks every 10 seconds for shorter videos
+        plt.xticks(range(0, int(max(time_values)) + 1, 10))
+        plt.gca().set_xticks(range(0, int(max(time_values)) + 1, 5), minor=True)
+    
+    plt.savefig(graph_path, dpi=200, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+def process_frame_batch(frame_batch, region_coordinates, region_texts, tesseract_config):
+    for frame in frame_batch:
+        results = process_roi_batch(frame, region_coordinates, tesseract_config)
+        for i, value in enumerate(results):
+            region_texts[i].append(value)
+
+def process_video(video_path, region_coordinates, headings_inputs):
     filename = f"VideoData_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     output_path = os.path.join("results", filename + ".xlsx")
     graph_path = os.path.join("results", filename + ".png")
@@ -82,6 +126,7 @@ def process_video(video_path, region_coordinates, headings_inputs):
     
     fps = capture.get(cv2.CAP_PROP_FPS)
     total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_duration = total_frames / fps
     
     # Adaptive frame skipping based on video length
     if total_frames > 1000:
@@ -89,7 +134,9 @@ def process_video(video_path, region_coordinates, headings_inputs):
     else:
         skip_frames = max(1, int(fps // 2))  # Original logic for shorter videos
     
-    print(f"Processing video: {total_frames} frames at {fps} FPS, skipping every {skip_frames} frames")
+    print(f"Processing video: {total_frames} frames at {fps} FPS")
+    print(f"Video duration: {video_duration:.1f} seconds")
+    print(f"Skipping every {skip_frames} frames ({skip_frames/fps:.2f} seconds between samples)")
     
     # Pre-compile tesseract config
     tesseract_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.'
@@ -125,9 +172,14 @@ def process_video(video_path, region_coordinates, headings_inputs):
     # Process remaining frames in batch
     if frame_batch:
         process_frame_batch(frame_batch, region_coordinates, region_texts, tesseract_config)
+        processed_frames += len(frame_batch)
     
     capture.release()
     cv2.destroyAllWindows()
+    
+    print(f"Total frames processed: {processed_frames}")
+    expected_duration = (processed_frames - 1) * skip_frames / fps
+    print(f"Graph will show {expected_duration:.1f} seconds of data")
     
     # Create DataFrame with proper error handling
     headings = [h.strip() for h in headings_inputs.split(",")]
@@ -151,38 +203,14 @@ def process_video(video_path, region_coordinates, headings_inputs):
     # Save to Excel
     df.to_excel(output_path, index=False)
     
-    # Optimized plotting
-    create_optimized_plot(df, graph_path)
+    # Create plot with correct time axis
+    create_optimized_plot(df, graph_path, fps, skip_frames)
     
     print(f"Processing complete: {output_path}, {graph_path}")
     return output_path, graph_path
 
-def process_frame_batch(frame_batch, region_coordinates, region_texts, tesseract_config):
-    for frame in frame_batch:
-        results = process_roi_batch(frame, region_coordinates, tesseract_config)
-        for i, value in enumerate(results):
-            region_texts[i].append(value)
-
-def create_optimized_plot(df, graph_path):
-    plt.figure(figsize=(12, 8))
-    
-    # Use more efficient plotting
-    for column in df.columns:
-        plt.plot(df.index, df[column], label=column, linewidth=1.5)
-    
-    plt.title('Temperature Readings Over Time', fontsize=14)
-    plt.xlabel('Time (frame intervals)', fontsize=12)
-    plt.ylabel('Temperature (°C)', fontsize=12)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, alpha=0.3)
-    
-    # Save with optimization
-    plt.savefig(graph_path, dpi=200, bbox_inches='tight', facecolor='white')
-    plt.close()
-
 # Parallel frame processing version for maximum performance
 def process_video_parallel(video_path, region_coordinates, headings_inputs, max_workers=None):
-    
     if max_workers is None:
         max_workers = min(mp.cpu_count(), 8)  # Limit to prevent overwhelming system
     
@@ -191,6 +219,22 @@ def process_video_parallel(video_path, region_coordinates, headings_inputs, max_
     graph_path = os.path.join("results", filename + ".png")
     
     os.makedirs("results", exist_ok=True)
+    
+    # Get video info first
+    capture = cv2.VideoCapture(video_path)
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_duration = total_frames / fps
+    capture.release()
+    
+    # Calculate skip_frames
+    if total_frames > 1000:
+        skip_frames = int(fps)
+    else:
+        skip_frames = max(1, int(fps // 2))
+    
+    print(f"Video info: {total_frames} frames at {fps} FPS, duration: {video_duration:.1f}s")
+    print(f"Skip frames: {skip_frames} ({skip_frames/fps:.2f} seconds between samples)")
     
     # Step 1: Extract all frames that need processing (fast, sequential)
     print("Extracting frames for processing...")
@@ -201,8 +245,10 @@ def process_video_parallel(video_path, region_coordinates, headings_inputs, max_
         return None, None
     
     print(f"Extracted {len(frames_data)} frames for parallel processing using {max_workers} workers")
+    expected_duration = (len(frames_data) - 1) * skip_frames / fps
+    print(f"Graph will show {expected_duration:.1f} seconds of data")
     
-    # Step 2: Process all frames in parallel (this is where the magic happens!)
+    # Step 2: Process all frames in parallel
     tesseract_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.'
     
     # Create a partial function with fixed parameters
@@ -246,7 +292,7 @@ def process_video_parallel(video_path, region_coordinates, headings_inputs, max_
             df[column] = column_data.where(non_zero_mask, avg_value)
     
     df.to_excel(output_path, index=False)
-    create_optimized_plot(df, graph_path)
+    create_optimized_plot(df, graph_path, fps, skip_frames)
     
     print(f"Parallel processing complete: {output_path}, {graph_path}")
     return output_path, graph_path
@@ -281,7 +327,6 @@ def process_frame_with_regions(frame_data, regions, tesseract_config):
 
 # Even faster: Multiprocessing version (uses separate processes instead of threads)
 def process_video_multiprocess(video_path, region_coordinates, headings_inputs, max_workers=None):
-    
     if max_workers is None:
         max_workers = min(mp.cpu_count() - 1, 6)  # Leave one core free
     
@@ -291,6 +336,22 @@ def process_video_multiprocess(video_path, region_coordinates, headings_inputs, 
     
     os.makedirs("results", exist_ok=True)
     
+    # Get video info first
+    capture = cv2.VideoCapture(video_path)
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_duration = total_frames / fps
+    capture.release()
+    
+    # Calculate skip_frames
+    if total_frames > 1000:
+        skip_frames = int(fps)
+    else:
+        skip_frames = max(1, int(fps // 2))
+    
+    print(f"Video info: {total_frames} frames at {fps} FPS, duration: {video_duration:.1f}s")
+    print(f"Skip frames: {skip_frames} ({skip_frames/fps:.2f} seconds between samples)")
+    
     print("Extracting frames for multiprocessing...")
     frames_data = extract_frames_with_indices(video_path)
     
@@ -299,6 +360,8 @@ def process_video_multiprocess(video_path, region_coordinates, headings_inputs, 
         return None, None
     
     print(f"Processing {len(frames_data)} frames using {max_workers} processes")
+    expected_duration = (len(frames_data) - 1) * skip_frames / fps
+    print(f"Graph will show {expected_duration:.1f} seconds of data")
     
     # Multiprocessing - each process gets its own Python interpreter
     tesseract_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.'
@@ -342,13 +405,12 @@ def process_video_multiprocess(video_path, region_coordinates, headings_inputs, 
             df[column] = column_data.where(non_zero_mask, avg_value)
     
     df.to_excel(output_path, index=False)
-    create_optimized_plot(df, graph_path)
+    create_optimized_plot(df, graph_path, fps, skip_frames)
     
     print(f"Multiprocessing complete: {output_path}, {graph_path}")
     return output_path, graph_path
 
 def process_frame_multiprocess_worker(frame_data, regions, tesseract_config):
-    
     frame_idx, frame = frame_data
     results = []
     
@@ -372,7 +434,6 @@ def process_frame_multiprocess_worker(frame_data, regions, tesseract_config):
     return frame_idx, results
 
 def extract_frames_with_indices(video_path):
-
     capture = cv2.VideoCapture(video_path)
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     
@@ -400,3 +461,50 @@ def extract_frames_with_indices(video_path):
     
     capture.release()
     return frames_data
+
+# Quick diagnostic function to check your video timing
+def diagnose_video_timing(video_path, region_coordinates=None):
+    """Quick function to diagnose timing issues"""
+    capture = cv2.VideoCapture(video_path)
+    
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+    
+    if total_frames > 1000:
+        skip_frames = int(fps)
+    else:
+        skip_frames = max(1, int(fps // 2))
+    
+    # Count how many frames would actually be processed
+    frame_count = 0
+    processed_count = 0
+    
+    while True:
+        ret, frame = capture.read()
+        if not ret:
+            break
+        if frame_count % skip_frames == 0:
+            processed_count += 1
+        frame_count += 1
+    
+    capture.release()
+    
+    print("=== VIDEO TIMING DIAGNOSIS ===")
+    print(f"Video duration: {duration:.1f} seconds")
+    print(f"Total frames: {total_frames}")
+    print(f"FPS: {fps}")
+    print(f"Skip frames: {skip_frames} (every {skip_frames/fps:.2f} seconds)")
+    print(f"Frames that will be processed: {processed_count}")
+    print(f"Graph x-axis should go from 0 to {(processed_count-1) * skip_frames/fps:.1f} seconds")
+    print("===============================")
+    
+    return {
+        'video_duration': duration,
+        'total_frames': total_frames,
+        'fps': fps,
+        'skip_frames': skip_frames,
+        'processed_frames': processed_count,
+        'graph_duration': (processed_count-1) * skip_frames/fps
+    }
+
